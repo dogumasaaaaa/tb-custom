@@ -1,0 +1,147 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>CloudDrive - Custom Minimalist Frontend</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+</head>
+<body class="bg-[#121214] text-gray-100 min-h-screen flex flex-col md:flex-row">
+
+    <aside class="w-full md:w-64 bg-[#1a1a1e] p-6 border-b md:border-b-0 md:border-r border-gray-800 flex flex-col justify-between shrink-0">
+        <div>
+            <div class="flex items-center gap-3 mb-8">
+                <i class="fa-solid fa-cloud text-cyan-400 text-3xl"></i>
+                <h1 class="text-xl font-bold tracking-wider">TeraClean</h1>
+            </div>
+            <nav class="space-y-2">
+                <button onclick="navigateTo('/')" class="w-full flex items-center gap-3 px-4 py-3 bg-cyan-500/10 text-cyan-400 rounded-xl font-medium text-left transition"><i class="fa-solid fa-folder-open"></i> My Drive</button>
+                <button onclick="createNewFolder()" class="w-full flex items-center gap-3 px-4 py-3 hover:bg-gray-800 text-gray-400 hover:text-gray-100 rounded-xl text-left transition"><i class="fa-solid fa-folder-plus"></i> New Folder</button>
+            </nav>
+        </div>
+        <div id="clipboard-bar" class="hidden mt-6 p-3 bg-gray-800/80 rounded-xl text-xs space-y-2 border border-gray-700">
+            <p class="font-semibold text-amber-400"><i class="fa-solid fa-paperclip"></i> Clipboard Active</p>
+            <div class="flex gap-2">
+                <button onclick="executePaste()" class="bg-cyan-500 hover:bg-cyan-600 px-3 py-1 rounded text-white font-medium">Paste</button>
+                <button onclick="clearClipboard()" class="bg-gray-700 hover:bg-gray-600 px-3 py-1 rounded text-gray-300">Cancel</button>
+            </div>
+        </div>
+    </aside>
+
+    <main class="flex-1 p-4 md:p-8 overflow-y-auto">
+        <div class="mb-6 flex flex-wrap items-center gap-2 text-sm text-gray-400">
+            <span class="hover:text-cyan-400 cursor-pointer" onclick="navigateTo('/')">root</span>
+            <span id="current-path-display"></span>
+        </div>
+
+        <div id="files-container" class="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
+            <p class="text-gray-400 p-4">Indexing cloud streams...</p>
+        </div>
+    </main>
+
+    <div id="media-modal" class="fixed inset-0 bg-black/90 z-50 hidden flex flex-col items-center justify-center p-4">
+        <button onclick="closeMediaModal()" class="absolute top-4 right-4 text-white text-3xl hover:text-gray-400"><i class="fa-solid fa-xmark"></i></button>
+        <h3 id="modal-title" class="text-lg font-semibold mb-4 text-center max-w-xl truncate">Media Asset</h3>
+        <div id="media-viewport" class="w-full max-w-3xl aspect-video bg-black rounded-lg flex items-center justify-center overflow-hidden">
+            </div>
+    </div>
+
+    <script>
+        let currentDir = '/';
+        let clipboard = { action: null, fs_id: null, source_dir: null };
+
+        async function fetchFiles() {
+            const container = document.getElementById('files-container');
+            container.innerHTML = '<div class="col-span-full py-8 text-center"><i class="fa-solid fa-spinner animate-spin text-2xl text-cyan-400"></i></div>';
+            
+            try {
+                const res = await fetch(`/.netlify/functions/driveManager?action=list&dir=${encodeURIComponent(currentDir)}`);
+                const data = await res.json();
+                container.innerHTML = '';
+
+                if (!data || data.length === 0) {
+                    container.innerHTML = '<p class="text-gray-500 col-span-full p-4 text-center">Empty directory layout.</p>';
+                    return;
+                }
+
+                data.forEach(item => {
+                    const card = document.createElement('div');
+                    card.className = "bg-[#1a1a1e] hover:bg-[#222227] p-4 rounded-2xl border border-gray-800/60 transition flex flex-col justify-between group";
+                    const isFolder = item.isdir === 1;
+                    
+                    // Determine icons based on classifications
+                    let icon = 'fa-regular fa-file text-gray-400';
+                    if (isFolder) icon = 'fa-solid fa-folder text-amber-400 text-2xl';
+                    else if (item.thumbs?.url) icon = `fa-regular fa-file-video text-cyan-400`;
+                    else if (item.server_filename.endsWith('.mp3') || item.server_filename.endsWith('.wav')) icon = 'fa-solid fa-file-audio text-emerald-400';
+
+                    card.innerHTML = `
+                        <div class="flex items-start gap-3 cursor-pointer" onclick="${isFolder ? `MapsTo('${item.path}')` : `playMedia('${item.dlink}', '${item.server_filename}')`}">
+                            <div class="pt-1"><i class="${icon}"></i></div>
+                            <div class="overflow-hidden">
+                                <p class="font-medium text-sm text-gray-200 group-hover:text-cyan-400 truncate break-all" title="${item.server_filename}">${item.server_filename}</p>
+                                <p class="text-xs text-gray-500">${isFolder ? 'Directory' : (item.size / (1024*1024)).toFixed(1) + ' MB'}</p>
+                            </div>
+                        </div>
+                        <div class="flex justify-end gap-3 mt-4 pt-2 border-t border-gray-800/40 text-xs text-gray-400">
+                            <button onclick="setClipboard('move', '${item.fs_id}')" class="hover:text-amber-400" title="Move file"><i class="fa-solid fa-scissors"></i></button>
+                            <a href="${item.dlink}" download target="_blank" class="hover:text-cyan-400" title="Download direct"><i class="fa-solid fa-arrow-down"></i></a>
+                        </div>
+                    `;
+                    container.appendChild(card);
+                });
+                document.getElementById('current-path-display').innerText = currentDir;
+            } catch (err) {
+                container.innerHTML = '<p class="text-red-400 col-span-full p-4">Error communicating with API endpoint bridge.</p>';
+            }
+        }
+
+        function navigateTo(path) { currentDir = path; fetchFiles(); }
+        
+        function playMedia(streamUrl, filename) {
+            const modal = document.getElementById('media-modal');
+            const title = document.getElementById('modal-title');
+            const viewport = document.getElementById('media-viewport');
+            title.innerText = filename;
+            modal.classList.remove('hidden');
+
+            if (filename.endsWith('.mp3') || filename.endsWith('.wav')) {
+                viewport.innerHTML = `<audio controls src="${streamUrl}" class="w-full px-6" autoplay></audio>`;
+            } else {
+                viewport.innerHTML = `<video controls src="${streamUrl}" class="w-full h-full" autoplay></video>`;
+            }
+        }
+
+        function closeMediaModal() {
+            document.getElementById('media-modal').classList.add('hidden');
+            document.getElementById('media-viewport').innerHTML = '';
+        }
+
+        function setClipboard(action, fsId) {
+            clipboard = { action, fs_id: fsId, source_dir: currentDir };
+            document.getElementById('clipboard-bar').classList.remove('hidden');
+        }
+        function clearClipboard() {
+            clipboard = { action: null, fs_id: null, source_dir: null };
+            document.getElementById('clipboard-bar').classList.add('hidden');
+        }
+
+        async function executePaste() {
+            if(!clipboard.fs_id) return;
+            const res = await fetch(`/.netlify/functions/driveManager?action=move&fs_id=${clipboard.fs_id}&target_dir=${encodeURIComponent(currentDir)}`);
+            clearClipboard();
+            fetchFiles();
+        }
+
+        async function createNewFolder() {
+            const name = prompt("Enter clean folder designation name:");
+            if(!name) return;
+            await fetch(`/.netlify/functions/driveManager?action=mkdir&dir=${encodeURIComponent(currentDir)}&name=${encodeURIComponent(name)}`);
+            fetchFiles();
+        }
+
+        window.onload = fetchFiles;
+    </script>
+</body>
+</html>
